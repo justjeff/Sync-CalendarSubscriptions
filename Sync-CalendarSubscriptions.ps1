@@ -203,7 +203,7 @@ function Show-EditGroupMenu {
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds | Where-Object { $_ -ne $cal.Id })
           $Group.CalendarIds = $targetGroup.CalendarIds
           Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
-          Write-Host "Unlinked." -ForegroundColor -Green
+          Write-Host "Unlinked." -ForegroundColor Green
           Start-Sleep -Seconds 1
         }
       }
