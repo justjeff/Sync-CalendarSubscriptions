@@ -113,7 +113,7 @@ function Show-CalendarMenu {
       Write-Host ""
     }
 
-    Write-Host "[1] Add Calendar [2] Delete Calendar [B] Back"
+    Write-Host "[1] Add Calendar [2] Delete Calendar [X] Back/Cancel"
     $choice = Read-Host "Selection"
 
     switch ($choice.ToUpper()) {
@@ -145,7 +145,7 @@ function Show-CalendarMenu {
           Start-Sleep -Seconds 1
         }
       }
-      "B" { return }
+      "X" { return }
     }
   }
 }
@@ -168,7 +168,7 @@ function Show-EditGroupMenu {
     else { $linked | ForEach-Object { Write-Host "  - $($_.Label) ( $($_.Id) )"} }
     Write-Host ""
 
-    Write-Host "[1] Link Calendar [2] Unlink Calendar [3] Delete Group [B] Back"
+    Write-Host "[1] Link Calendar [2] Unlink Calendar [3] Delete Group [X] Back/Cancel"
     $choice = Read-Host "Selection"
 
     switch ($choice.ToUpper()) {
@@ -217,7 +217,7 @@ function Show-EditGroupMenu {
           return
         }
       }
-      "B" { return }
+      "X" { return }
     }
   }
 }
@@ -238,7 +238,7 @@ function Show-GroupMenu {
       Write-Host ""
     }
 
-    Write-Host "[1] Add Group [2] Edit Group [B] Back"
+    Write-Host "[1] Add Group [2] Edit Group [X] Back/Cancel"
     $choice = Read-Host "Selection"
 
     switch ($choice.ToUpper()) {
@@ -270,7 +270,7 @@ function Show-GroupMenu {
           $cfg = Read-Config -ConfigPath $ConfigPath
         }
       }
-      "B" { return }
+      "X" { return }
     }
   }
 }
