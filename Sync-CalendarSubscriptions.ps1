@@ -211,7 +211,7 @@ function Show-EditGroupMenu {
         $confirm = Read-Host "Delete group '$($Group.Label)'? [Y/N]"
         if ($confirm.ToUpper() -eq "Y") {
           $cfg.Groups = @($cfg.Groups | Where-Object { $_.Email -ne $Group.Email })
-          Save-Config -ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
           Write-Host "Group deleted." -ForegroundColor Green
           Start-Sleep -Seconds 1
           return
