@@ -120,6 +120,11 @@ function Show-CalendarMenu {
       "1" {
         $id    = Read-Host "Enter Calendar ID (e.g. c_xxxx@group.calendar.google.com)"
         $label = Read-Host "Enter Label (e.g. Events)"
+        if ($cfg.Calendars | Where-Object { $_.Id -eq $id }) { # Checks if duplicate calendars. Warns if found.
+          Write-Host "A calendar with that ID already exists." -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+          continue
+        }
         $cfg.Calendars += [PSCustomObject]@{ Id = $id; Label = $label }
         Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
       }
@@ -180,7 +185,7 @@ function Show-EditGroupMenu {
           Start-Sleep -Seconds 2
           continue
         }
-        $cal = Select-FromList -Prompt "Select calendar to link" -Items $unlinked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        $cal = Select-FromList -Prompt "`nSelect calendar to link" -Items $unlinked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
         if ($cal) {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds) + $cal.Id
@@ -197,7 +202,7 @@ function Show-EditGroupMenu {
           Start-Sleep -Seconds 2
           continue
         }
-        $cal = Select-FromList -Prompt "Select calendar to unlink" -Items $linked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        $cal = Select-FromList -Prompt "`nSelect calendar to unlink" -Items $linked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
         if ($cal) {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds | Where-Object { $_ -ne $cal.Id })
@@ -245,6 +250,11 @@ function Show-GroupMenu {
       "1" {
         $email = Read-Host "Enter Group Email"
         $label = Read-Host "Enter Label (e.g. Marketing)"
+        if ($cfg.Groups | Where-Object { $_.Email -eq $email }) { # Checks for duplicate groups, warns if found.
+          Write-Host "A group with that email already exists." -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+          continue
+        }
         $newGroup = [PSCustomObject]@{ Email = $email; Label = $label; CalendarIds = @() }
         $cfg.Groups += $newGroup
         Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
@@ -264,7 +274,7 @@ function Show-GroupMenu {
       "2" {
         Write-Header "Edit Group"
         $cfg = Read-Config -ConfigPath $ConfigPath
-        $group = Select-FromList -Prompt "Select group to edit" -Items $cfg.Groups -DisplayScript { param($g) "$($g.Label) ( $($g.Email) )" }
+        $group = Select-FromList -Prompt "`nSelect group to edit" -Items $cfg.Groups -DisplayScript { param($g) "$($g.Label) ( $($g.Email) )" }
         if ($group) {
           Show-EditGroupMenu -ConfigPath $ConfigPath -Group $group
           $cfg = Read-Config -ConfigPath $ConfigPath
