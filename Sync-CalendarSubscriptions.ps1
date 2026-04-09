@@ -88,9 +88,9 @@ function Select-FromList {
   for ($i = 0; $i -lt $Items.Count; $i++) {
     Write-Host "  [$($i + 1)] $(& $DisplayScript $Items[$i])"
   }
-  Write-Host "  [Q] Cancel"
+  Write-Host "  [X] Cancel"
   $choice = Read-Host $Prompt
-  if ($choice.ToUpper() -eq "Q" -or $choice -eq "") { return $null }
+  if ($choice.ToUpper() -eq "X" -or $choice -eq "") { return $null }
   $index = [int]$choice - 1
   if ($index -ge 0 -and $index -lt $Items.Count) {
     return $Items[$index]
@@ -180,7 +180,7 @@ function Show-EditGroupMenu {
           Start-Sleep -Seconds 2
           continue
         }
-        $cal = Select-FromList -Prompt "Select calendar to link" -Items $unlinked -DisplayScript { param($c) "$($c.Label) ( $($c.Id))" }
+        $cal = Select-FromList -Prompt "Select calendar to link" -Items $unlinked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
         if ($cal) {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds) + $cal.Id
@@ -197,7 +197,7 @@ function Show-EditGroupMenu {
           Start-Sleep -Seconds 2
           continue
         }
-        $cal = Select-FromList -Prompt "Select calendar to unlink" -Items $linked -DisplayScript { param($c) "$($c.Label) ( $($c.Id))" }
+        $cal = Select-FromList -Prompt "Select calendar to unlink" -Items $linked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
         if ($cal) {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds | Where-Object { $_ -ne $cal.Id })
