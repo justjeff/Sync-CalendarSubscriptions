@@ -7,8 +7,8 @@
   Launches an interactive mode to view/add Groups and Calendars to config.json
   .PARAMETER ConfigPath
   Path to the config.json file. Defaults to config.json in the script directory.
-  .PARAMETER EventLogSource
-  Windows Event Log source name. Defaults to Add-CalendarForGroupMembers
+  .PARAMETER AppTitle
+  Used in app menu and as the Windows Event Log source name. Defaults to Sync-CalendarSubscriptions
 
   .NOTES
   Requires a config.json file and requires GAM7.
@@ -19,7 +19,7 @@ param (
     [Parameter()]
     [switch]$Config,
     [string]$ConfigPath = (Join-Path $PSScriptRoot "config.json"),
-    [string]$EventLogSource = "Sync-CalendarSubscriptions"
+    [string]$AppTitle = "Sync-CalendarSubscriptions"
 )
 
 # --- Helper function for Windows Event Logging ---
@@ -30,64 +30,288 @@ function Write-Log {
         [string]$EntryType = "Information"
     )
 
-    if (-not [System.Diagnostics.EventLog]::SourceExists($EventLogSource)) {
+    if (-not [System.Diagnostics.EventLog]::SourceExists($AppTitle)) {
         try {
-            New-EventLog -LogName Application -Source $EventLogSource -ErrorAction Stop
+            New-EventLog -LogName Application -Source $AppTitle -ErrorAction Stop
         } catch {
-            Write-Output "[$EntryType] $Message (Source '$EventLogSource' missing)"
+            Write-Output "[$EntryType] $Message (Source '$AppTitle' missing)"
             return
         }
     }
-    Write-EventLog -LogName Application -Source $EventLogSource -EntryType $EntryType -EventId 1001 -Message $Message
+    Write-EventLog -LogName Application -Source $AppTitle -EntryType $EntryType -EventId 1001 -Message $Message
 }
 
-# --- Config Manager ---
-function Show-ConfigMenu {
+# --- INTERACTIVE CONFIG MANAGER ---
+# --- Load Config File ---
+function Read-Config {
+  param([string]$ConfigPath)
   if (Test-Path $ConfigPath) {
-    $data = Get-Content $ConfigPath | ConvertFrom-Json
-  } else {
-    $data = [PSCustomObject]@{ Groups = @(); Calendars = @() }
+    $data      = Get-Content $ConfigPath | ConvertFrom-Json
+    $groups    = @($data.Groups)
+    $calendars = @($data.Calendars)
+  } else { # No config? No problem - we create an object
+    $groups    = @()
+    $calendars = @()
   }
+  return @{ Groups = $groups; Calendars = $calendars }
+}
 
-  # Interactive Menu Display
+# --- Write the object to the config file ---
+function Save-Config {
+  param([string]$ConfigPath, [array]$Groups, [array]$Calendars)
+  $out = [PSCustomObject]@{ Groups = @($Groups); Calendars = @($Calendars) }
+  $out | ConvertTo-Json -Depth 10 | Out-File $ConfigPath
+  Write-Host "`nSaved: $ConfigPath" -ForegroundColor Green
+}
+
+# --- Menu Helpers ---
+function Write-Header {
+  param([string]$Title)
+  Clear-Host
+  Write-Host ""
+  Write-Host "=== $AppTitle - $Title ===" -ForegroundColor Cyan
+  Write-Host ""
+}
+
+function Select-FromList {
+  # Presents a numbered list and returns selected item
+  param(
+    [string]$Prompt,
+    [array]$Items,
+    [scriptBlock]$DisplayScript
+  )
+  if ($Items.Count -eq 0) { # Handling no items
+    Write-Host "(none)" -ForegroundColor DarkGray
+    return $null
+  }
+  for ($i = 0; $i -lt $Items.Count; $i++) {
+    Write-Host "  [$($i + 1)] $(& $DisplayScript $Items[$i])"
+  }
+  Write-Host ""
+  Write-Host "  [X] Cancel"
+  $choice = Read-Host $Prompt
+  if ($choice.ToUpper() -eq "X" -or $choice -eq "") { return $null }
+  $index = [int]$choice - 1
+  if ($index -ge 0 -and $index -lt $Items.Count) {
+    return $Items[$index]
+  }
+  Write-Host "Invalid Selection" -ForegroundColor Red
+  return $null
+}
+
+# --- Calendar mgmt ---
+function Show-CalendarMenu {
+  param([string]$ConfigPath)
+  $cfg = Read-Config -ConfigPath $ConfigPath
+
   while ($true) {
-    Clear-Host
-    Write-Host "=== Sync Calendar Subscriptions Config ===" -ForegroundColor Cyan
-    Write-Host "`nGroups: "
-    $data.Groups | ForEach-Object { Write-Host " - $($_.Email) ( $($_.Label) )" }
+    Write-Header "Manage Calendars"
+    if ($cfg.Calendars.Count -eq 0) {
+      Write-Host "  (no calendars defined)`n" -ForegroundColor DarkGray
+    } else {
+      $cfg.Calendars | ForEach-Object { Write-Host " - $($_.Label) ( $($_.Id) )" }
+      Write-Host ""
+    }
 
-    Write-Host "`nCalendars: "
-    $data.Calendars | ForEach-Object { Write-Host " - $($_.Id) ( $($_.Label) )" }
-
-    Write-Host "`n[1] Add Group [2] Add Calendar [3] Save & Exit [Q] Quit"
+    Write-Host "[1] Add Calendar [2] Delete Calendar [X] Back/Cancel"
     $choice = Read-Host "`nSelection"
 
-    switch ($choice) {
+    switch ($choice.ToUpper()) {
       "1" {
-        $email = Read-Host "Enter Group Email"
-        $label = Read-Host "Enter Label (e.g. Marketing)"
-        $data.Groups += [PSCustomObject]@{ Email = $email; Label = $label }
+        $id    = Read-Host "Enter Calendar ID"
+        $label = Read-Host "Enter Label (e.g. Events)"
+        $cfg.Calendars += [PSCustomObject]@{ Id = $id; Label = $label }
+        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
       }
       "2" {
-        $id = Read-Host "Enter Calendar ID"
-        $label = Read-Host "Enter Label (e.g. Events)"
-        $data.Calendars += [PSCustomObject]@{ Id = $id; Label = $label }
+        Write-Header "Delete Calendar"
+        $cal = Select-FromList -Prompt "Select calender to delete" -Items $cfg.Calendars -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        if ($cal) {
+          # Warn if any groups reference this calendar!
+          $linked = @($cfg.Groups | Where-Object { $_.CalendarIds -contains $cal.Id })
+          if ($linked.Count -gt 0) {
+            Write-Host "WARNING: This calendar is linked to $($linked.Count) group(s):" -ForegroundColor Yellow
+            $linked | ForEach-Object { Write-Host " - $($_.Label)" -ForegroundColor Yellow }
+            $confirm = Read-Host "Delete and unlink from all groups? [Y/N]"
+            if ($confirm.ToUpper() -ne "Y") { continue }
+            # Unlink
+            foreach ($group in $cfg.Groups) {
+              $group.CalendarIds = @($group.CalendarIds | Where-Object { $_ -ne $cal.Id })
+            }
+          }
+          $cfg.Calendars = @($cfg.Calendars | Where-Object { $_.Id -ne $cal.Id })
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Write-Host "`nCalendar Deleted" -ForegroundColor Green
+          Start-Sleep -Seconds 1
+        }
       }
-      "3" {
-        $data | ConvertTo-Json -Depth 10 | Out-File $ConfigPath
-        Write-Host "Saved Config File: $ConfigPath" -ForegroundColor Green
-        return
-      }
-      "Q" {return}
+      "X" { return }
     }
   }
 }
 
+# --- Group mgmt ---
+function Show-EditGroupMenu {
+  param(
+    [string]$ConfigPath,
+    [PSCustomObject]$Group
+    )
+  $cfg = Read-Config -ConfigPath $ConfigPath
+
+  while ($true) {
+    Write-Header "Edit Group: $($Group.Label)"
+
+    # Linked Calendars
+    $linked = @($cfg.Calendars | Where-Object { $Group.CalendarIds -contains $_.Id })
+    Write-Host "Linked Calendars:"
+    if ($linked.Count -eq 0) { Write-Host " (none)" -ForegroundColor DarkGray }
+    else { $linked | ForEach-Object { Write-Host "  - $($_.Label) ( $($_.Id) )"} }
+    Write-Host ""
+
+    Write-Host "[1] Link Calendar [2] Unlink Calendar [3] Delete Group [X] Back/Cancel"
+    $choice = Read-Host "`nSelection"
+
+    switch ($choice.ToUpper()) {
+      "1" {
+        Write-Header "Link Calendar to $($Group.Label)"
+        $unlinked = @($cfg.Calendars | Where-Object { $Group.CalendarIds -notcontains $_.Id })
+        if ($unlinked.Count -eq 0) {
+          Write-Host "All available calendars are already linked." -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+          continue
+        }
+        $cal = Select-FromList -Prompt "Select calendar to link" -Items $unlinked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        if ($cal) {
+          $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
+          $targetGroup.CalendarIds = @($targetGroup.CalendarIds) + $cal.Id
+          $Group.CalendarIds = $targetGroup.CalendarIds
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Write-Host "`nLinked." -ForegroundColor Green
+          Start-Sleep -Seconds 1
+        }
+      }
+      "2" {
+        Write-Header "Unlink Calendar from $($Group.Label)"
+        if ($linked.Count -eq 0) {
+          Write-Host "No calendars linked to this group." -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+          continue
+        }
+        $cal = Select-FromList -Prompt "Select calendar to unlink" -Items $linked -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        if ($cal) {
+          $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
+          $targetGroup.CalendarIds = @($targetGroup.CalendarIds | Where-Object { $_ -ne $cal.Id })
+          $Group.CalendarIds = $targetGroup.CalendarIds
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Write-Host "`nUnlinked." -ForegroundColor Green
+          Start-Sleep -Seconds 1
+        }
+      }
+      "3" {
+        $confirm = Read-Host "Delete group '$($Group.Label)'? [Y/N]"
+        if ($confirm.ToUpper() -eq "Y") {
+          $cfg.Groups = @($cfg.Groups | Where-Object { $_.Email -ne $Group.Email })
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Write-Host "`nGroup deleted." -ForegroundColor Green
+          Start-Sleep -Seconds 1
+          return
+        }
+      }
+      "X" { return }
+    }
+  }
+}
+
+function Show-GroupMenu {
+  param([string]$ConfigPath)
+  $cfg = Read-Config -ConfigPath $ConfigPath
+
+  while($true) {
+    Write-Header "Manage Groups"
+    if ($cfg.Groups.Count -eq 0) {
+      Write-Host "  (no groups defined)" -ForegroundColor DarkGray
+    } else {
+      $cfg.Groups | ForEach-Object {
+        $calCount = @($_.CalendarIds).Count
+        Write-Host "  - $($_.Label) ( $($_.Email) ) - $calCount calendar(s) linked"
+      }
+      Write-Host ""
+    }
+
+    Write-Host "[1] Add Group [2] Edit Group [X] Back/Cancel"
+    $choice = Read-Host "`nSelection"
+
+    switch ($choice.ToUpper()) {
+      "1" {
+        $email = Read-Host "Enter Group Email"
+        $label = Read-Host "Enter Label (e.g. Marketing)"
+        $newGroup = [PSCustomObject]@{ Email = $email; Label = $label; CalendarIds = @() }
+        $cfg.Groups += $newGroup
+        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+
+        # Prompt to link calendars immediately
+        if ($cfg.Calendars.Count -gt 0) {
+          $link = Read-Host "Link calendars to this group? [Y/N]"
+          if ($link.ToUpper() -eq "Y") {
+            Show-EditGroupMenu -ConfigPath $ConfigPath -Group $newGroup
+          }
+        } else {
+          Write-Host "No calendars defined yet. Add calendars first, then edit this group to link them."
+          Start-Sleep -Seconds 3
+        }
+        $cfg = Read-Config -ConfigPath $ConfigPath
+      }
+      "2" {
+        Write-Header "Edit Group"
+        $cfg = Read-Config -ConfigPath $ConfigPath
+        $group = Select-FromList -Prompt "Select group to edit" -Items $cfg.Groups -DisplayScript { param($g) "$($g.Label) ( $($g.Email) )" }
+        if ($group) {
+          Show-EditGroupMenu -ConfigPath $ConfigPath -Group $group
+          $cfg = Read-Config -ConfigPath $ConfigPath
+        }
+      }
+      "X" { return }
+    }
+  }
+}
+
+# Main Menu
+function Show-ConfigMenu {
+  param([string]$ConfigPath)
+
+  while ($true) {
+    $cfg = Read-Config -ConfigPath $ConfigPath
+    Write-Header "Main Menu"
+
+    Write-Host "  Groups:     $(@($cfg.Groups).Count) defined"
+    Write-Host "  Calendars:  $(@($cfg.Calendars).Count) defined"
+    Write-Host "  Config:     $ConfigPath" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "[1] Manage Groups [2] Manage Calendars [Q] Quit"
+    $choice = Read-Host "`nSelection"
+
+    switch ($choice.ToUpper()) {
+      "1" { Show-GroupMenu    -ConfigPath $ConfigPath }
+      "2" { Show-CalendarMenu -ConfigPath $ConfigPath }
+      "Q" {
+        Clear-Host
+        return
+      }
+    }
+  }
+}
+
+# --- NON-INTERACTIVE MODE ---
 # --- Preflight Checks ---
 function Start-Preflight {
   # Verify config is present
+  param([string]$ConfigPath)
   if (-not (Test-Path $ConfigPath)) {
-    throw "No config found at $ConfigPath. Run with -Config to set up default."
+    throw "No config found at $ConfigPath. Run with -Config to set up."
+  }
+  # Verify config is not empty
+  if ((Get-Item $ConfigPath).Length -eq 0) {
+    throw "Config file exists but is empty at '$ConfigPath'. Run with -Config to set up."
   }
   # Verify GAM accessibility
   if (-not (Get-Command "gam" -ErrorAction SilentlyContinue)) {
@@ -98,37 +322,51 @@ function Start-Preflight {
 # --- Entry Point ---
 # Run w/ -Config param
 if ($Config) {
-  Write-Host "This tool is for quick adds. `nTo remove items or make major changes, edit the config file directly in any text editor."
-  Write-Host "$ConfigPath"
-  Start-Sleep -Seconds 5
-  Show-ConfigMenu
+  Show-ConfigMenu -ConfigPath $ConfigPath
   exit
 }
 
 $tempCsv = [System.IO.Path]::GetTempFileName()
 
 try {
-  Start-Preflight
-  $Settings = Get-Content $ConfigPath | ConvertFrom-Json
+  Start-Preflight -ConfigPath $ConfigPath
+  $cfg = Read-Config -ConfigPath $ConfigPath
+  $groups = @($cfg.Groups)
 
-  foreach ($Group in $Settings.Groups) {
-    Write-Log "Starting GAM sync: Group $($Group.Label)"
+  # Verifying config actually has groups
+  if (@($groups).Count -eq 0) {
+    throw "No groups defined in config. Run with -Config to set up."
+  }
+  # Verifying config actually has calendars
+  if (@($cfg.Calendars).Count -eq 0) {
+    throw "No calendars defined in config. Run with -Config to set up."
+  }
+
+  foreach ($Group in $groups) {
+    $calendars = @($cfg.Calendars | Where-Object { $Group.CalendarIds -contains $_.Id })
+
+    if ($calendars.Count -eq 0) {
+      Write-Log "Skipping: '$($Group.Label)' - no calendars linked." -EntryType Warning
+      continue
+    }
+
+    Write-Log "Starting GAM sync: '$($Group.Label)' ($($Group.Email)) - $($calendars.Count) calendar(s)."
     # GAM: 'redirect' writes directly to csv, ensuring there's no PS pipe formatting/artifacts to contend with
     # 'print group-members group ...' and 'recursive types user' ensures we grab all users that are members of this group and child groups.
     gam redirect csv "$tempCsv" print group-members group "$($Group.Email)" recursive types user
 
     # VALIDATE CSV CONTENT: Ensure we have more than just a header row
-    $csvData = Import-Csv $tempCsv -ErrorAction SilentlyContinue
+    $csvData = @(Import-Csv $tempCsv -ErrorAction SilentlyContinue)
     if (-not $csvData) {
-        throw "No members found for group $($Group.Label) or group does not exist."
+        throw "No members found for group $($Group.Label) or group may not exist or has no members."
     }
     Write-Log "Found $($csvData.Count) users to process."
 
-    foreach ($Calendar in $Settings.Calendars) {
+    foreach ($Calendar in $calendars) {
       Write-Log "Processing: Adding $($Calendar.Label) to members of $($Group.Label)."
-      gam csv $tempCsv gam user "~email" add calendar "$($calendar.Id)" selected true
+      gam csv $tempCsv gam user "~email" add calendar "$($Calendar.Id)" selected true
     }
-    Write-Log "Sync complete for $($Group.Label)."
+    Write-Log "Sync complete for '$($Group.Label)'."
   }
 }
 catch {
