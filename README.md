@@ -1,6 +1,6 @@
 # Sync-CalendarSubscriptions
 
-A PowerShell script that uses [GAM7](https://github.com/GAM-team/GAM) to automatically subscribe Google Group members to one or more Google Calendars. Group membership is resolved recursively, so users in nested child groups are included.
+A PowerShell script that uses [GAM7](https://github.com/GAM-team/GAM) to automatically subscribe Google Group members to one or more Google Calendars. Group membership is resolved recursively, so users in nested child groups are included. Each group can be mapped to its own set of calendars.
 
 ---
 
@@ -28,16 +28,19 @@ Run the script with the `-Config` flag to launch the interactive configuration m
 .\Sync-GroupCalendars.ps1 -Config
 ```
 
-Use the menu to add one or more Google Groups and the Calendars that their members should be subscribed to. The config is saved as `config.json` in the same directory as the script.
+Use the menu to add one or more Google Groups and Calendars separately. The config is saved as `config.json` in the same directory as the script.
 
-To remove entries or make bulk edits, open `config.json` directly in any text editor. The structure is straightforward:
+To remove entries or make bulk edits, open `config.json` directly in any text editor.
 
 ```json
 {
   "Groups": [
     {
       "Email": "my-group@domain.com",
-      "Label": "My Group"
+      "Label": "My Group",
+      "CalendarIds": [
+        "c_abc123...@group.calendar.google.com"
+      ]
     }
   ],
   "Calendars": [
@@ -49,7 +52,7 @@ To remove entries or make bulk edits, open `config.json` directly in any text ed
 }
 ```
 
-Each entry in `Groups` will have every calendar in `Calendars` added to its members. Multiple groups and multiple calendars are supported.
+Each group maps to its own list of calendars via `CalendarIds`. A calendar can be linked to multiple groups. The top-level `Calendars` array is the shared pool that groups reference from by ID.
 
 ---
 
@@ -79,7 +82,7 @@ Each entry in `Groups` will have every calendar in `Calendars` added to its memb
 |---|---|---|---|
 | `-Config` | Switch | — | Launches the interactive config menu |
 | `-ConfigPath` | String | `.\config.json` | Path to the config file |
-| `-EventLogSource` | String | `Sync-GroupCalendars` | Windows Event Log source name |
+| `-AppTitle` | String | `Sync-CalendarSubscriptions` | Used as the Windows Event Log source name and in the Config Menu |
 
 ---
 
@@ -87,9 +90,12 @@ Each entry in `Groups` will have every calendar in `Calendars` added to its memb
 
 For each Group defined in `config.json`, the script:
 
-1. Calls GAM7 to fetch all user members of the group, recursively resolving any nested child groups (`recursive types user`)
-2. Validates that at least one user was returned
-3. For each Calendar defined in `config.json`, calls GAM7 to add the calendar to each user's account with `selected true` (visible by default)
+1. Resolves which calendars are linked to that group via `CalendarIds`
+2. Calls GAM7 to fetch all user members of the group, recursively resolving any nested child groups (`recursive types user`)
+3. Validates that at least one user was returned
+4. For each linked calendar, calls GAM7 to add the calendar to each user's account with `selected true` (visible by default)
+
+Groups with no linked calendars are skipped, logging a warning.
 
 If a user is already subscribed to a calendar, GAM7's `add calendar` is idempotent — it will not create duplicates or throw an error.
 
@@ -134,6 +140,7 @@ To run on a schedule, create a Task Scheduler job that calls:
 Program: powershell.exe
 Arguments: -NonInteractive -ExecutionPolicy Bypass -File "C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1"
 ```
+_Make sure this points to the script on your own system!_
 
 Ensure the task runs under an account that has:
 - GAM7 on its `PATH`
