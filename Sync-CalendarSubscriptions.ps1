@@ -361,8 +361,11 @@ try {
     }
 
     Write-Log "Starting GAM sync: '$($Group.Label)' ($($Group.Email)) - $($calendars.Count) calendar(s)."
-    # GAM: 'redirect' writes directly to csv, ensuring there's no PS pipe formatting/artifacts to contend with
-    # 'print group-members group ...' and 'recursive types user' ensures we grab all users that are members of this group and child groups.
+    <# ------
+     GAM: 'redirect' writes directly to csv, ensuring there's no PS pipe formatting/artifacts to contend with
+     'print group-members group ...' and 'recursive types user'
+     ensures we grab all users that are members of this group and child groups.
+    ------ #>
     gam redirect csv "$tempCsv" print group-members group "$($Group.Email)" recursive types user
 
     # VALIDATE CSV CONTENT: Ensure we have more than just a header row
@@ -374,7 +377,11 @@ try {
 
     foreach ($Calendar in $calendars) {
       Write-Log "Processing: Adding $($Calendar.Label) to members of $($Group.Label)."
-      gam csv $tempCsv gam user "~email" add calendar "$($Calendar.Id)" selected true
+      # Baseline single-threaded call - use if experiencing API quota/throttling issues:
+      # gam csv "$tempCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+
+      # Multithreaded - adjust num_threads (current: 16) based on API quota and performance:
+      gam config num_threads 16 csv "$tempCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
     }
     Write-Log "Sync complete for '$($Group.Label)'."
   }
