@@ -71,9 +71,6 @@ Each group maps to its own list of calendars via `CalendarIds`. A calendar can b
 
 SyncDays are also set in the `config.json`, this refers to how many days should be deferred for sync. More about SyncDays and Sync State below, in *How It Works*.
 
-### 3. Set up a Scheduled Task
-While this tool can be run manually, it works best as a scheduled task to be run daily or weekly.
-
 ---
 
 ## Usage
@@ -131,10 +128,10 @@ NB - If members are removed from the group they may still appear in the state fi
 
 ## Logging
 
-All activity is written to the **Windows Event Log** under `Application` with the source `Sync-GroupCalendars` (or whatever `-EventLogSource` is set to).
+All activity is written to the **Windows Event Log** under `Application` with the source `Sync-GroupCalendars` (or whatever `-AppTitle` is set to).
 
 | Event | Level |
-|---|---|
+|-------|-------|
 | Sync started for a group | Information |
 | User count found | Information |
 | Calendar being processed | Information |
@@ -164,7 +161,7 @@ To run on a schedule, create a Task Scheduler job that calls:
 
 ```
 Program: powershell.exe
-Arguments: -NonInteractive -ExecutionPolicy Bypass -File "C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1"
+Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1'"
 ```
 _Make sure this points to the script on your own system!_
 
