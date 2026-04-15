@@ -25,14 +25,14 @@ See the [GAM7 installation guide](https://github.com/GAM-team/GAM/wiki/How-to-In
 Run the script with the `-Config` flag to launch the interactive configuration menu:
 
 ```powershell
-.\Sync-GroupCalendars.ps1 -Config
+.\Deploy-GroupCalendars.ps1 -Config
 ```
 
-Use the menu to add one or more Google Groups and Calendars, or to manage the State Sync. The config is saved as `config.json` in the same directory as the script.
+Use the menu to add one or more Google Groups and Calendars, or to manage the State. The config is saved as `config.json` in the same directory as the script.
 
 ```json
 {
-    "SyncDays": "7",
+    "DeployDays": "7",
     "Groups":  [
                    {
                        "Email":  "group1@domain.tld",
@@ -69,7 +69,7 @@ Use the menu to add one or more Google Groups and Calendars, or to manage the St
 
 Each group maps to its own list of calendars via `CalendarIds`. A calendar can be linked to multiple groups. The top-level `Calendars` array is the shared pool that groups reference from by ID.
 
-SyncDays are also set in the `config.json`, this refers to how many days should be deferred for sync. More about SyncDays and Sync State below, in *How It Works*.
+DeployDays are also set in the `config.json`, this refers to how many days should be deferred for deployment. More about DeployDays and State below, in *How It Works*.
 
 ---
 
@@ -78,19 +78,19 @@ SyncDays are also set in the `config.json`, this refers to how many days should 
 ### Run manually
 
 ```powershell
-.\Sync-GroupCalendars.ps1
+.\Deploy-GroupCalendars.ps1
 ```
 
 ### Open the config menu
 
 ```powershell
-.\Sync-GroupCalendars.ps1 -Config
+.\Deploy-GroupCalendars.ps1 -Config
 ```
 
 ### Use a custom config path
 
 ```powershell
-.\Sync-GroupCalendars.ps1 -ConfigPath "C:\Scripts\my-config.json"
+.\Deploy-GroupCalendars.ps1 -ConfigPath "C:\Scripts\my-config.json"
 ```
 
 ### Parameters
@@ -99,8 +99,8 @@ SyncDays are also set in the `config.json`, this refers to how many days should 
 |---|---|---|---|
 | `-Config` | Switch | — | Launches the interactive config menu |
 | `-ConfigPath` | String | `.\config.json` | Path to the config file |
-| `-AppTitle` | String | `Sync-CalendarSubscriptions` | Used as the Windows Event Log source name and in the Config Menu |
-| `-StateDir` | String | `.\state` | Directory to store state files per group. These files are used to filter out recently synchronized users |
+| `-AppTitle` | String | `Deploy-CalendarSubscriptions` | Used as the Windows Event Log source name and in the Config Menu |
+| `-StateDir` | String | `.\state` | Directory to store state files per group. These files are used to filter out users and calendars recently deployed |
 
 ---
 
@@ -114,10 +114,8 @@ For each Group defined in `config.json`, the script:
 4. Compares the list of users and calendars against that group's state file (stored in `.\state` by default), filtering out users below the SyncDays threshold
 5. For each linked calendar, calls GAM7 to add the calendar to each user's account with `selected true` (visible by default)
 
-## Sync State
-Sync State allows admin to configure a set number of days to defer sync for all users. This can help cut down on GAM calls, especially with large groups with relatively stable membership. The sync process will save a list (a state file) of users and calendar relationships for each group, along with a timestamp. When it pulls down the latest group members into a temp CSV, it will compare that membership against that state file. Any new members, or members outside of the `SyncDays` threshold will be synchronized. Other members will be skipped. If needed, the state file can be deleted and rebuilt on the next sync. If GAM hits a snag, the state file will save where it had left off, and will catch up the sync on the next scheduled run.
-
-NB - If members are removed from the group they may still appear in the state file but will not be synchronized as they are not current members of the group.
+## State
+State allows admin to configure a set number of days to defer deployment for all users. This can help cut down on GAM calls, especially with large groups with relatively stable membership. The deployment process will save a list (a state file) of users and calendar relationships for each group, along with a timestamp. When it pulls down the latest group members into a temp CSV, it will compare that membership against that state file. Deployment will run for any new members or members outside of the `DeployDays` threshold. Other members will be skipped. If needed, the state file can be deleted and rebuilt on the next deployment run. If GAM hits a snag, the state file will save where it had left off, and will catch up the deployment on the next scheduled run.
 
 > **FYI**
 > 1. If a user is a member of multiple nested child groups within the same parent, they may appear more than once in the member list. This does not cause problems but will be reflected in the logged user count.
@@ -128,21 +126,21 @@ NB - If members are removed from the group they may still appear in the state fi
 
 ## Logging
 
-All activity is written to the **Windows Event Log** under `Application` with the source `Sync-GroupCalendars` (or whatever `-AppTitle` is set to).
+All activity is written to the **Windows Event Log** under `Application` with the source `Deploy-GroupCalendars` (or whatever `-AppTitle` is set to).
 
 | Event | Level |
 |-------|-------|
-| Sync started for a group | Information |
+| Deploy started for a group | Information |
 | User count found | Information |
 | Calendar being processed | Information |
-| Sync complete for a group | Information |
+| Deploy complete for a group | Information |
 | No members found / group missing | Error |
 | Any unhandled exception | Error |
 
 To view logs:
 
 ```
-Event Viewer → Windows Logs → Application → Source: Sync-GroupCalendars
+Event Viewer → Windows Logs → Application → Source: Deploy-GroupCalendars
 ```
 
 > **First run:** Creating a new Event Log source requires administrator privileges. If the script is not run as an administrator on first use, it will fall back to `Write-Output` for that session. Run once as administrator (or pre-register the source) to initialize it permanently.
@@ -150,7 +148,7 @@ Event Viewer → Windows Logs → Application → Source: Sync-GroupCalendars
 ### Pre-register the Event Log source (run once as administrator)
 
 ```powershell
-New-EventLog -LogName Application -Source "Sync-GroupCalendars"
+New-EventLog -LogName Application -Source "Deploy-GroupCalendars"
 ```
 
 ---
@@ -161,7 +159,7 @@ To run on a schedule, create a Task Scheduler job that calls:
 
 ```
 Program: powershell.exe
-Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1'"
+Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Deploy-GroupCalendars\Deploy-GroupCalendars.ps1'"
 ```
 _Make sure this points to the script on your own system!_
 
@@ -175,8 +173,8 @@ Ensure the task runs under an account that has:
 ## File Structure
 
 ```
-Sync-CalendarSubscriptions/
-├── Sync-CalendarSubscriptions.ps1
+Deploy-CalendarSubscriptions/
+├── Deploy-CalendarSubscriptions.ps1
 ├── config.json
 ├── README.md
 └── state/
