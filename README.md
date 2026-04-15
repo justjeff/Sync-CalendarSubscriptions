@@ -159,7 +159,7 @@ To run on a schedule, create a Task Scheduler job that calls:
 
 ```
 Program: powershell.exe
-Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Deploy-GroupCalendars\Deploy-GroupCalendars.ps1'"
+Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Deploy-CalendarSubscriptions\Deploy-CalendarSubscriptions.ps1'"
 ```
 _Make sure this points to the script on your own system!_
 
