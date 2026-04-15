@@ -28,31 +28,48 @@ Run the script with the `-Config` flag to launch the interactive configuration m
 .\Sync-GroupCalendars.ps1 -Config
 ```
 
-Use the menu to add one or more Google Groups and Calendars separately. The config is saved as `config.json` in the same directory as the script.
-
-To remove entries or make bulk edits, open `config.json` directly in any text editor.
+Use the menu to add one or more Google Groups and Calendars, or to manage the State Sync. The config is saved as `config.json` in the same directory as the script.
 
 ```json
 {
-  "Groups": [
-    {
-      "Email": "my-group@domain.com",
-      "Label": "My Group",
-      "CalendarIds": [
-        "c_abc123...@group.calendar.google.com"
-      ]
-    }
-  ],
-  "Calendars": [
-    {
-      "Id": "c_abc123...@group.calendar.google.com",
-      "Label": "All Staff Events"
-    }
-  ]
+    "SyncDays": "7",
+    "Groups":  [
+                   {
+                       "Email":  "group1@domain.tld",
+                       "Label":  "Group 1",
+                       "CalendarIds": [
+                                          "c_789lmnop...@group.calendar.google.com"
+                       ]
+                   },
+                   {
+                       "Email":  "group2@domain.tld",
+                       "Label":  "Group 2",
+                       "CalendarIds":  [
+                                           "c_123xyz...@group.calendar.google.com",
+                                           "c_456jkl...@resource.calendar.google.com"
+                                       ]
+                   }
+               ],
+    "Calendars":  [
+                      {
+                          "Id":  "c_123xyz...@group.calendar.google.com",
+                          "Label":  "Events"
+                      },
+                      {
+                          "Id":  "c_456jkl...@resource.calendar.google.com",
+                          "Label":  "Conference Room"
+                      },
+                      {
+                          "Id":  "c_789lmnop...@group.calendar.google.com",
+                          "Label":  "Party Planning Committee"
+                      }
+                  ]
 }
 ```
 
 Each group maps to its own list of calendars via `CalendarIds`. A calendar can be linked to multiple groups. The top-level `Calendars` array is the shared pool that groups reference from by ID.
+
+SyncDays are also set in the `config.json`, this refers to how many days should be deferred for sync. More about SyncDays and Sync State below, in *How It Works*.
 
 ---
 
@@ -83,6 +100,7 @@ Each group maps to its own list of calendars via `CalendarIds`. A calendar can b
 | `-Config` | Switch | — | Launches the interactive config menu |
 | `-ConfigPath` | String | `.\config.json` | Path to the config file |
 | `-AppTitle` | String | `Sync-CalendarSubscriptions` | Used as the Windows Event Log source name and in the Config Menu |
+| `-StateDir` | String | `.\state` | Directory to store state files per group. These files are used to filter out recently synchronized users |
 
 ---
 
@@ -93,22 +111,27 @@ For each Group defined in `config.json`, the script:
 1. Resolves which calendars are linked to that group via `CalendarIds`
 2. Calls GAM7 to fetch all user members of the group, recursively resolving any nested child groups (`recursive types user`)
 3. Validates that at least one user was returned
-4. For each linked calendar, calls GAM7 to add the calendar to each user's account with `selected true` (visible by default)
+4. Compares the list of users and calendars against that group's state file (stored in `.\state` by default), filtering out users below the SyncDays threshold
+5. For each linked calendar, calls GAM7 to add the calendar to each user's account with `selected true` (visible by default)
 
-Groups with no linked calendars are skipped, logging a warning.
+## Sync State
+Sync State allows admin to configure a set number of days to defer sync for all users. This can help cut down on GAM calls, especially with large groups with relatively stable membership. The sync process will save a list (a state file) of users and calendar relationships for each group, along with a timestamp. When it pulls down the latest group members into a temp CSV, it will compare that membership against that state file. Any new members, or members outside of the `SyncDays` threshold will be synchronized. Other members will be skipped. If needed, the state file can be deleted and rebuilt on the next sync. If GAM hits a snag, the state file will save where it had left off, and will catch up the sync on the next scheduled run.
 
-If a user is already subscribed to a calendar, GAM7's `add calendar` is idempotent — it will not create duplicates or throw an error.
+NB - If members are removed from the group they may still appear in the state file but will not be synchronized as they are not current members of the group.
 
-> **Note:** If a user is a member of multiple nested child groups within the same parent, they may appear more than once in the member list. This does not cause problems but will be reflected in the logged user count.
+> **FYI**
+> 1. If a user is a member of multiple nested child groups within the same parent, they may appear more than once in the member list. This does not cause problems but will be reflected in the logged user count.
+> 2. Groups with no linked calendars are skipped, logging a warning.
+> 3. If a user is already subscribed to a calendar, GAM7's `add calendar` is idempotent — it will not create duplicates or throw an error.
 
 ---
 
 ## Logging
 
-All activity is written to the **Windows Event Log** under `Application` with the source `Sync-GroupCalendars` (or whatever `-EventLogSource` is set to).
+All activity is written to the **Windows Event Log** under `Application` with the source `Sync-GroupCalendars` (or whatever `-AppTitle` is set to).
 
 | Event | Level |
-|---|---|
+|-------|-------|
 | Sync started for a group | Information |
 | User count found | Information |
 | Calendar being processed | Information |
@@ -138,7 +161,7 @@ To run on a schedule, create a Task Scheduler job that calls:
 
 ```
 Program: powershell.exe
-Arguments: -NonInteractive -ExecutionPolicy Bypass -File "C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1"
+Arguments: -NonInteractive -ExecutionPolicy Bypass -Command "& 'C:\Scripts\Sync-GroupCalendars\Sync-GroupCalendars.ps1'"
 ```
 _Make sure this points to the script on your own system!_
 
@@ -152,7 +175,11 @@ Ensure the task runs under an account that has:
 ## File Structure
 
 ```
-Sync-GroupCalendars/
-├── Sync-GroupCalendars.ps1
-└── config.json
+Sync-CalendarSubscriptions/
+├── Sync-CalendarSubscriptions.ps1
+├── config.json
+├── README.md
+└── state/
+    ├── state-group1-domain-tld.json
+    └── state-group2-domain-tld.json
 ```

@@ -7,6 +7,8 @@
   Launches an interactive mode to view/add Groups and Calendars to config.json
   .PARAMETER ConfigPath
   Path to the config.json file. Defaults to config.json in the script directory.
+  .PARAMETER StateDir
+  Directory for state_group_domain_tld.json files. Defaults to \state in the script directory.
   .PARAMETER AppTitle
   Used in app menu and as the Windows Event Log source name. Defaults to Sync-CalendarSubscriptions
 
@@ -19,7 +21,8 @@ param (
     [Parameter()]
     [switch]$Config,
     [string]$ConfigPath = (Join-Path $PSScriptRoot "config.json"),
-    [string]$AppTitle = "Sync-CalendarSubscriptions"
+    [string]$StateDir   = (Join-Path $PSScriptRoot "state"),
+    [string]$AppTitle   = "Sync-CalendarSubscriptions"
 )
 
 # --- Helper function for Windows Event Logging ---
@@ -49,19 +52,82 @@ function Read-Config {
     $data      = Get-Content $ConfigPath | ConvertFrom-Json
     $groups    = @($data.Groups)
     $calendars = @($data.Calendars)
+    $syncDays  = if ($null -ne $data.SyncDays) { $data.SyncDays } else { 7 }
   } else { # No config? No problem - we create an object
     $groups    = @()
     $calendars = @()
+    $syncDays  = 7
   }
-  return @{ Groups = $groups; Calendars = $calendars }
+  return @{ Groups = $groups; Calendars = $calendars; SyncDays = $syncDays }
 }
 
 # --- Write the object to the config file ---
 function Save-Config {
-  param([string]$ConfigPath, [array]$Groups, [array]$Calendars)
-  $out = [PSCustomObject]@{ Groups = @($Groups); Calendars = @($Calendars) }
+  param([string]$ConfigPath, [array]$Groups, [array]$Calendars, [int]$SyncDays = 7)
+  $out = [PSCustomObject]@{ Groups = @($Groups); Calendars = @($Calendars); SyncDays = $syncDays }
   $out | ConvertTo-Json -Depth 10 | Out-File $ConfigPath
   Write-Host "`nSaved: $ConfigPath" -ForegroundColor Green
+}
+
+# --- STATE MANAGEMENT ---
+function Read-State {
+  param([string]$StateDir, [string]$GroupEmail)
+    $stateFile = Join-Path $StateDir "state-$($GroupEmail -replace '[^a-zA-Z0-9]', '-').json"
+    if (Test-Path $stateFile) {
+        return Get-Content $stateFile | ConvertFrom-Json
+    }
+    # No state file yet - return empty object
+    return [PSCustomObject]@{}
+}
+
+function Save-State {
+  param([string]$StateDir, [string]$GroupEmail, [PSCustomObject]$State)
+    if (-not (Test-Path $StateDir)) {
+        New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    }
+    $stateFile = Join-Path $StateDir "state-$($GroupEmail -replace '[^a-zA-Z0-9]', '-').json"
+    $State | ConvertTo-Json -Depth 10 | Out-File $stateFile
+}
+
+function Get-UsersNeedingSync {
+    # Returns users from $Members who either have no state entry for this calendar,
+    # or whose last sync is older than $SyncDays.
+    param(
+        [array]$Members,
+        [PSCustomObject]$State,
+        [string]$CalendarId,
+        [int]$SyncDays
+    )
+    $calState = $State.$CalendarId
+    $now      = Get-Date
+
+    return $Members | Where-Object {
+        $email    = $_.email
+        $lastSync = if ($calState -and $calState.$email) { [datetime]$calState.$email } else { $null }
+        -not $lastSync -or ($now - $lastSync).TotalDays -gt $SyncDays
+    }
+}
+
+function Update-State {
+  # Stamps each synced user with the current datetime for this calendar.
+  param(
+    [PSCustomObject]$State,
+    [string]$CalendarId,
+    [array]$SyncedUsers
+  )
+  if (-not $State.$CalendarId) {
+    $State | Add-Member -NotePropertyName $CalendarId -NotePropertyValue ([PSCustomObject]@{}) -Force
+  }
+  $now = (Get-Date).ToString("o") # ISO 8601
+  foreach ($user in $SyncedUsers) {
+    # Ensure we add the email as a property to the calendar sub-object
+    if (-not $State.$CalendarId.$($user.email)) {
+        $State.$CalendarId | Add-Member -NotePropertyName $user.email -NotePropertyValue $now -Force
+    } else {
+        $State.$CalendarId.$($user.email) = $now
+    }
+  }
+  return $State
 }
 
 # --- Menu Helpers ---
@@ -126,11 +192,11 @@ function Show-CalendarMenu {
           continue
         }
         $cfg.Calendars += [PSCustomObject]@{ Id = $id; Label = $label }
-        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
       }
       "2" {
         Write-Header "Delete Calendar"
-        $cal = Select-FromList -Prompt "Select calender to delete" -Items $cfg.Calendars -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
+        $cal = Select-FromList -Prompt "Select calendar to delete" -Items $cfg.Calendars -DisplayScript { param($c) "$($c.Label) ( $($c.Id) )" }
         if ($cal) {
           # Warn if any groups reference this calendar!
           $linked = @($cfg.Groups | Where-Object { $_.CalendarIds -contains $cal.Id })
@@ -145,7 +211,7 @@ function Show-CalendarMenu {
             }
           }
           $cfg.Calendars = @($cfg.Calendars | Where-Object { $_.Id -ne $cal.Id })
-          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
           Write-Host "`nCalendar Deleted" -ForegroundColor Green
           Start-Sleep -Seconds 1
         }
@@ -190,7 +256,7 @@ function Show-EditGroupMenu {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds) + $cal.Id
           $Group.CalendarIds = $targetGroup.CalendarIds
-          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
           Write-Host "`nLinked." -ForegroundColor Green
           Start-Sleep -Seconds 1
         }
@@ -207,7 +273,7 @@ function Show-EditGroupMenu {
           $targetGroup = $cfg.Groups | Where-Object { $_.Email -eq $Group.Email }
           $targetGroup.CalendarIds = @($targetGroup.CalendarIds | Where-Object { $_ -ne $cal.Id })
           $Group.CalendarIds = $targetGroup.CalendarIds
-          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
           Write-Host "`nUnlinked." -ForegroundColor Green
           Start-Sleep -Seconds 1
         }
@@ -216,7 +282,7 @@ function Show-EditGroupMenu {
         $confirm = Read-Host "Delete group '$($Group.Label)'? [Y/N]"
         if ($confirm.ToUpper() -eq "Y") {
           $cfg.Groups = @($cfg.Groups | Where-Object { $_.Email -ne $Group.Email })
-          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
           Write-Host "`nGroup deleted." -ForegroundColor Green
           Start-Sleep -Seconds 1
           return
@@ -257,7 +323,7 @@ function Show-GroupMenu {
         }
         $newGroup = [PSCustomObject]@{ Email = $email; Label = $label; CalendarIds = @() }
         $cfg.Groups += $newGroup
-        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars
+        Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
 
         # Prompt to link calendars immediately
         if ($cfg.Calendars.Count -gt 0) {
@@ -285,6 +351,54 @@ function Show-GroupMenu {
   }
 }
 
+# --- Sync State Menus ---
+function Show-SyncStateMenu {
+  param([string]$ConfigPath, [string]$StateDir)
+  $cfg = Read-Config  -ConfigPath $ConfigPath
+
+  while($true) {
+    Write-Header "Sync State Settings"
+    Write-Host "  Current SyncDays: $($cfg.SyncDays)"
+    Write-Host "  Users are re-synced if their last sync is older than SyncDays." -ForegroundColor DarkGray
+    Write-Host "  Set to 0 to always sync all users (disables state filtering)." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "[1] Update SyncDays  [2] Clear State Files  [X] Back/Cancel"
+    $choice = Read-Host "`nSelection"
+
+    switch ($choice.ToUpper()) {
+      "1" {
+        $days = Read-Host "Enter number of days between full re-syncs (current: $($cfg.SyncDays))"
+        if ($days -match '^\d+$') {
+          $cfg.SyncDays = [int]$days
+          Save-Config -ConfigPath $ConfigPath -Groups $cfg.Groups -Calendars $cfg.Calendars -SyncDays $cfg.SyncDays
+          Write-Host "SyncDays updated to $($cfg.SyncDays)." -ForegroundColor Green
+          Start-Sleep -Seconds 1
+        } else {
+          Write-Host "Invalid input. Please enter a whole number." -ForegroundColor Red
+          Start-Sleep -Seconds 2
+        }
+      }
+      "2" {
+        # Wipe state files to force a full re-sync on next run
+        $stateFiles = @(Get-ChildItem -Path $StateDir -Filter "state-*.json" -ErrorAction SilentlyContinue)
+        if ($stateFiles.Count -eq 0) {
+          Write-Host "No state files found." -ForegroundColor Yellow
+          Start-Sleep -Seconds 2
+          continue
+        }
+        Write-Host "This will delete $($stateFiles.Count) state file(s) and force a full re-sync on next run." -ForegroundColor Yellow
+        $confirm = Read-Host "Continue? [Y/N]"
+        if ($confirm.ToUpper() -eq "Y") {
+          $stateFiles | Remove-Item -Force
+          Write-Host "State files cleared." -ForegroundColor Green
+          Start-Sleep -Seconds 1
+        }
+      }
+      "X" { return }
+    }
+  }
+}
+
 # Main Menu
 function Show-ConfigMenu {
   param([string]$ConfigPath)
@@ -292,65 +406,72 @@ function Show-ConfigMenu {
   while ($true) {
     $cfg = Read-Config -ConfigPath $ConfigPath
     Write-Header "Main Menu"
-
     Write-Host "  Groups:     $(@($cfg.Groups).Count) defined"
     Write-Host "  Calendars:  $(@($cfg.Calendars).Count) defined"
+    Write-Host "  Sync Days:  $($cfg.SyncDays)"
     Write-Host "  Config:     $ConfigPath" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "[1] Manage Groups [2] Manage Calendars [Q] Quit"
+    Write-Host "[1] Manage Groups  [2] Manage Calendars  [3] Sync State Settings  [Q] Quit"
     $choice = Read-Host "`nSelection"
 
     switch ($choice.ToUpper()) {
-      "1" { Show-GroupMenu    -ConfigPath $ConfigPath }
-      "2" { Show-CalendarMenu -ConfigPath $ConfigPath }
+      "1" { Show-GroupMenu      -ConfigPath $ConfigPath }
+      "2" { Show-CalendarMenu   -ConfigPath $ConfigPath }
+      "3" { Show-SyncStateMenu  -ConfigPath $ConfigPath -StateDir $StateDir }
       "Q" {
-        Clear-Host
-        return
+          Clear-Host
+          return
       }
     }
   }
 }
 
-# --- NON-INTERACTIVE MODE ---
 # --- Preflight Checks ---
 function Start-Preflight {
-  # Verify config is present
-  param([string]$ConfigPath)
+  param([string]$ConfigPath, [string]$StateDir, [array]$Groups, [array]$Calendars)
+  # Verify config exists...
   if (-not (Test-Path $ConfigPath)) {
-    throw "No config found at $ConfigPath. Run with -Config to set up."
+    throw "No config found at '$ConfigPath'. Run with -Config to set up."
   }
-  # Verify config is not empty
+  # Verify config isn't empty...
   if ((Get-Item $ConfigPath).Length -eq 0) {
     throw "Config file exists but is empty at '$ConfigPath'. Run with -Config to set up."
   }
-  # Verify GAM accessibility
+  # Verify gam is in path...
   if (-not (Get-Command "gam" -ErrorAction SilentlyContinue)) {
     throw "GAM command not found in PATH. Ensure GAM is installed and accessible for the service account."
   }
+  # Verify groups are defined (may not have any members!)
+  if ($Groups.Count -eq 0) {
+    throw "No groups defined in config. Run with -Config to set up."
+  }
+  # Verify calendars are defined (may not be associated with groups!)
+  if ($Calendars.Count -eq 0) {
+    throw "No calendars defined in config. Run with -Config to set up."
+  }
+  # Verify \state exists - creates it if not!
+  if (-not (Test-Path $StateDir)) {
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+  }
 }
 
-# --- Entry Point ---
+# --- SYNC ENGINE ---
 # Run w/ -Config param
 if ($Config) {
   Show-ConfigMenu -ConfigPath $ConfigPath
   exit
 }
 
+# Temp data files
 $tempCsv = [System.IO.Path]::GetTempFileName()
+$deltaCsv = [System.IO.Path]::GetTempFileName()
 
 try {
-  Start-Preflight -ConfigPath $ConfigPath
-  $cfg = Read-Config -ConfigPath $ConfigPath
-  $groups = @($cfg.Groups)
+  $cfg      = Read-Config -ConfigPath $ConfigPath
+  $groups   = @($cfg.Groups)
+  $syncDays = $cfg.SyncDays
 
-  # Verifying config actually has groups
-  if (@($groups).Count -eq 0) {
-    throw "No groups defined in config. Run with -Config to set up."
-  }
-  # Verifying config actually has calendars
-  if (@($cfg.Calendars).Count -eq 0) {
-    throw "No calendars defined in config. Run with -Config to set up."
-  }
+  Start-Preflight -ConfigPath $ConfigPath -StateDir $StateDir -Groups $groups -Calendars @($cfg.Calendars)
 
   foreach ($Group in $groups) {
     $calendars = @($cfg.Calendars | Where-Object { $Group.CalendarIds -contains $_.Id })
@@ -373,25 +494,49 @@ try {
     if (-not $csvData) {
         throw "No members found for group $($Group.Label) or group may not exist or has no members."
     }
-    Write-Log "Found $($csvData.Count) users to process."
+    Write-Log "Found $($csvData.Count) members in '$($Group.Label)'."
+
+    # Load state for this group
+    $state = Read-State -StateDir $StateDir -GroupEmail $Group.Email
 
     foreach ($Calendar in $calendars) {
-      Write-Log "Processing: Adding $($Calendar.Label) to members of $($Group.Label)."
-      # Baseline single-threaded call - use if experiencing API quota/throttling issues:
-      # gam csv "$tempCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+      if ($syncDays -gt 0) {
+        # Filter to only users who need syncing
+        $usersToSync = @(Get-UsersNeedingSync -Members $csvData -State $state -CalendarId $Calendar.Id -SyncDays $syncDays)
+      } else {
+        # SyncDays = 0 means always sync everyone
+        $usersToSync = $csvData
+      }
+
+      if ($usersToSync.Count -eq 0) {
+        Write-Log "All members already synced to '$($Calendar.Label)' - skipping."
+        continue
+      }
+
+      Write-Log "Adding '$($Calendar.Label)' to $($usersToSync.Count) member(s) of '$($Group.Label)'."
+
+      # Write delta to temp CSV for GAM
+      $usersToSync | Export-Csv $deltaCsv -NoTypeInformation
+
+      # Single-threaded call - use if experiencing API quota/throttling issues:
+      # gam csv "$deltaCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
 
       # Multithreaded - adjust num_threads (current: 16) based on API quota and performance:
-      gam config num_threads 16 csv "$tempCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+      gam config num_threads 16 csv "$deltaCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+
+      # Update state with newly synced users
+      $state = Update-State -State $state -CalendarId $Calendar.Id -SyncedUsers $usersToSync
     }
+    Save-State -StateDir $StateDir -GroupEmail $Group.Email -State $state
     Write-Log "Sync complete for '$($Group.Label)'."
   }
-}
-catch {
-    Write-Log "CRITICAL ERROR: $($_.Exception.Message)" -EntryType Error
-    throw $_
-}
-finally {
-    if (Test-Path $tempCsv) {
-        Remove-Item $tempCsv -ErrorAction SilentlyContinue
+} catch {
+  Write-Log "CRITICAL ERROR: $($_.Exception.Message)" -EntryType Error
+  throw $_
+} finally {
+  foreach ($f in @($tempCsv, $deltaCsv)) {
+    if ($f -and (Test-Path $f)) {
+      Remove-Item $f -ErrorAction SilentlyContinue
     }
+  }
 }
