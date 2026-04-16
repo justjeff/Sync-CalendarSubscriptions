@@ -12,7 +12,9 @@
   .PARAMETER MaxRetries
   Set an integer for GAM command retries.
   .PARAMETER AppTitle
-  Used in app menu and as the Windows Event Log source name. Defaults to Deploy-CalendarSubscriptions
+  Used in config menu and as the Windows Event Log source name. Defaults to Deploy-CalendarSubscriptions
+  .PARAMETER GamThreads
+  Sets number of threads GAM will use - default is 5.
 
   .NOTES
   Requires a config.json file and requires GAM7.
@@ -25,6 +27,8 @@ param (
     [string]$ConfigPath   = (Join-Path $PSScriptRoot "config.json"),
     [string]$StateDir     = (Join-Path $PSScriptRoot "state"),
     [string]$AppTitle     = "Deploy-CalendarSubscriptions",
+    [ValidateRange(1,12)]
+    [int]$GamThreads      = 5, # 5 is what GAM ships with.
     [int]$maxRetries      = 2 # Zero indexed, so total attempt is $MaxRetries + 1
 )
 
@@ -537,11 +541,14 @@ try {
       # Write delta to temp CSV for GAM
       $UsersToSub | Export-Csv $deltaCsv -NoTypeInformation
 
-      # Single-threaded call - use if experiencing API quota/throttling issues:
-      # gam csv "$deltaCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+      <# ---
+       gam user "~email" add calendar $($Calendar.Id) selected <boolean> clobbers the user's settings.
+       Better to just run it without that "selected" part, and respect the user's settings.
 
-      # Multithreaded - adjust num_threads (current: 16) based on API quota and performance:
-      gam config num_threads 16 csv "$deltaCsv" gam user "~email" add calendar "$($Calendar.Id)" selected true
+       We could check if the calendar already exists, then add it only if it doesn't,
+        but this call itself is idempotent - and that method would more than double the GAM processes.
+      --- #>
+       gam config num_threads $GamThreads csv "$deltaCsv" gam user "~email" add calendar "$($Calendar.Id)"
 
       # Update state with newly subscribed users
       $State = Update-State -State $State -CalendarId $Calendar.Id -SubscribedUsers $UsersToSub
